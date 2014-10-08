@@ -624,9 +624,9 @@
     <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;npts_spline_power_curve&#39;</span><span class="p">,</span> <span class="n">Int</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">,</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;number of points to use in fitting spline to power curve&#39;</span><span class="p">))</span>
     <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;AEP_loss_factor&#39;</span><span class="p">,</span> <span class="n">Float</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">,</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;availability and other losses (soiling, array, etc.)&#39;</span><span class="p">))</span>
     <span class="k">if</span> <span class="n">varspeed</span><span class="p">:</span>
-        <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;control&#39;</span><span class="p">,</span> <span class="n">VarTree</span><span class="p">(</span><span class="n">VarSpeedMachine</span><span class="p">(),</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">),</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;control parameters&#39;</span><span class="p">)</span>
+        <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;control&#39;</span><span class="p">,</span> <span class="n">VarTree</span><span class="p">(</span><span class="n">VarSpeedMachine</span><span class="p">(),</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">,</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;control parameters&#39;</span><span class="p">))</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;control&#39;</span><span class="p">,</span> <span class="n">VarTree</span><span class="p">(</span><span class="n">FixedSpeedMachine</span><span class="p">(),</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">),</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;control parameters&#39;</span><span class="p">)</span>
+        <span class="n">assembly</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s">&#39;control&#39;</span><span class="p">,</span> <span class="n">VarTree</span><span class="p">(</span><span class="n">FixedSpeedMachine</span><span class="p">(),</span> <span class="n">iotype</span><span class="o">=</span><span class="s">&#39;in&#39;</span><span class="p">,</span> <span class="n">desc</span><span class="o">=</span><span class="s">&#39;control parameters&#39;</span><span class="p">))</span>
 
 
     <span class="c"># add slots (must replace)</span>
@@ -896,7 +896,7 @@
     </div>
     <div class="footer">
         &copy; Copyright 2014, NREL.
-      Last updated on Sep 25, 2014.
+      Last updated on Oct 07, 2014.
       Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.2.2.
     </div>
   </body>
