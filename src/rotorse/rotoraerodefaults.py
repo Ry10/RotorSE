@@ -198,10 +198,15 @@ class AirfoilParameterization(Component):
 
     def generate_af(self):
 
-        n = len(self.airfoil_parameters)
-        af = [0]*n
         af_type = self.airfoil_parameterization_type
         af_parameters = self.airfoil_parameters
+        if af_type == 'CST':
+            n = len(self.airfoil_parameters[0])
+            af = [0]*n
+        else:
+            n = len(self.airfoil_parameters)
+            af = [0]*n
+
         r_over_R = 0.5
         chord_over_r = 0.15
         tsr = 7.55
@@ -210,6 +215,7 @@ class AirfoilParameterization(Component):
         for i in range(n):
             x = []
             y = []
+
             if af_type == 'Coordinates':
                 try:
                     f = open(af_parameters[i],'r')
@@ -229,10 +235,17 @@ class AirfoilParameterization(Component):
                     pts = naca5(str(int(af_parameters[i])), 60)
                 else:
                     'Please input only NACA 4 or 5 series'
-                x = pts[:][0]
-                y = pts[:][1]
+                for j in range(len(pts)):
+                    x.append(pts[j][0])
+                    y.append(pts[j][1])
             elif af_type == 'CST':
-                wu, wl = np.split(af_parameters[i], 2)
+                n = len(af_parameters)/2
+                wu = np.zeros(n)
+                wl = np.zeros(n)
+                for j in range(n):
+                    wu[j] = af_parameters[j][i]
+                    wl[j] = af_parameters[j + n][i]
+                # wu, wl = np.split(af_parameters[i], 2)
                 w1 = np.average(wl)
                 w2 = np.average(wu)
                 if w1 < w2:
@@ -246,13 +259,13 @@ class AirfoilParameterization(Component):
                 dz = 0.
 
                 # Populate x coordinates
-                x = np.ones((N, 1), dtype=complex)
+                x = np.ones((N, 1))
                 zeta = np.zeros((N, 1))
-                for i in range(0, N):
-                    zeta[i] = 2 * pi / N * i
-                    if i == N - 1:
-                        zeta[i] = 2 * pi
-                    x[i] = 0.5*(cos(zeta[i])+1)
+                for z in range(0, N):
+                    zeta[z] = 2 * pi / N * z
+                    if z == N - 1:
+                        zeta[z] = 2 * pi
+                    x[z] = 0.5*(cos(zeta[z])+1)
 
                 # N1 and N2 parameters (N1 = 0.5 and N2 = 1 for airfoil shape)
                 N1 = 0.5
@@ -264,21 +277,25 @@ class AirfoilParameterization(Component):
                 except:
                     zerind = N/2
 
-                xl = np.zeros(zerind, dtype=complex)
-                xu = np.zeros(N-zerind, dtype=complex)
+                xl = np.zeros(zerind)
+                xu = np.zeros(N-zerind)
 
-                for i in range(len(xl)):
-                    xl[i] = np.real(x[i])            # Lower surface x-coordinates
-                for i in range(len(xu)):
-                    xu[i] = np.real(x[i + zerind])   # Upper surface x-coordinates
+                for z in range(len(xl)):
+                    xl[z] = np.real(x[z])            # Lower surface x-coordinates
+                for z in range(len(xu)):
+                    xu[z] = np.real(x[z + zerind])   # Upper surface x-coordinates
 
                 yl = self.__ClassShape(wl, xl, N1, N2, -dz) # Call ClassShape function to determine lower surface y-coordinates
                 yu = self.__ClassShape(wu, xu, N1, N2, dz)  # Call ClassShape function to determine upper surface y-coordinates
 
                 y = np.concatenate([yl, yu])  # Combine upper and lower y coordinates
                 y = y[::-1]
-                coord_split = [xl, yl, xu, yu]  # Combine x and y into single output
-                coord = [x, y]
+                # coord_split = [xl, yl, xu, yu]  # Combine x and y into single output
+                # coord = [x, y]
+                x1 = np.zeros(len(x))
+                for k in range(len(x)):
+                    x1[k] = x[k][0]
+                x = x1
 
             else:
                 print 'Error. Airfoil parameterization type not specified. Please choose Coordinates, NACA, or CST.'

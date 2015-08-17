@@ -797,11 +797,26 @@ class GeometrySpline(Component):
 
 
         # airfoil parameterization
-        if self.airfoil_parameterization_type != 'Coordinates':
+        if self.airfoil_parameterization_type == 'Coordinates':
+            self.airfoil_parameters_aero = self.airfoil_parameters
+        elif self.airfoil_parameterization_type == 'NACA':
             af_parameters_spline = Akima(self.airfoil_locations*Rtip, self.airfoil_parameters)
             self.airfoil_parameters_aero, _, _, _ = af_parameters_spline.interp(self.r_aero)
+        elif self.airfoil_parameterization_type == 'CST':
+            self.airfoil_parameters_aero = np.zeros((len(self.airfoil_parameters), len(self.r_aero)))
+            for i in range(len(self.airfoil_parameters)):
+                nn = len(self.airfoil_parameters[0])
+                cst = []
+                for j in range(nn):
+                    cst.append(self.airfoil_parameters[j][i])
+                af_cst_spline = Akima(self.airfoil_locations*Rtip, cst)
+                cst_aero, _, _, _ = af_cst_spline.interp(self.r_aero)
+                for k in range(len(self.r_aero)):
+                    self.airfoil_parameters_aero[i][k] = cst_aero[k]
         else:
-            self.airfoil_parameters_aero = self.airfoil_parameters
+            pass
+
+
 
         # setup sparT parameterization
         nt = len(self.sparT)
@@ -2010,7 +2025,6 @@ class RotorSE(Assembly):
 
     def configure(self):
 
-        self.add('airfoil_param', AirfoilParameterization)
         self.add('turbineclass', TurbineClass())
         self.add('gridsetup', GridSetup())
         self.add('grid', RGrid())
@@ -2019,6 +2033,7 @@ class RotorSE(Assembly):
         self.add('geom', CCBladeGeometry())
         # self.add('tipspeed', MaxTipSpeed())
         self.add('setup', SetupRunVarSpeed())
+        self.add('airfoil_param', AirfoilParameterization())
         self.add('analysis', CCBlade())
         self.add('dt', CSMDrivetrain())
         self.add('powercurve', RegulatedPowerCurve())
@@ -2031,15 +2046,8 @@ class RotorSE(Assembly):
 
         self.brent.workflow.add(['powercurve'])
 
-        self.driver.workflow.add(['airfoil_param', 'turbineclass', 'gridsetup', 'grid', 'spline0', 'spline',
-            'geom', 'setup', 'analysis', 'dt', 'brent', 'wind', 'cdf', 'aep'])
-
-        # connections to airfoil_param
-        self.connect('airfoil_parameterization_type', 'airfoil_param.airfoil_parameterization_type')
-        self.connect('airfoil_analysis_tool', 'airfoil_param.airfoil_analysis_tool')
-        self.connect('airfoil_parameters', 'airfoil_param.airfoil_parameters')
-        self.connect('airfoil_locations', 'airfoil_param.airfoil_locations')
-        self.connect('airfoil_files', 'airfoil_param.airfoil_files')
+        self.driver.workflow.add(['turbineclass', 'gridsetup', 'grid', 'spline0', 'spline',
+            'geom', 'setup', 'airfoil_param', 'analysis', 'dt', 'brent', 'wind', 'cdf', 'aep'])
 
         # connections to turbineclass
         self.connect('turbine_class', 'turbineclass.turbine_class')
@@ -2104,6 +2112,13 @@ class RotorSE(Assembly):
         self.connect('control', 'setup.control')
         self.connect('geom.R', 'setup.R')
         self.connect('npts_coarse_power_curve', 'setup.npts')
+
+        # connections to airfoil_param
+        self.connect('airfoil_parameterization_type', 'airfoil_param.airfoil_parameterization_type')
+        self.connect('airfoil_analysis_tool', 'airfoil_param.airfoil_analysis_tool')
+        self.connect('spline.airfoil_parameters_aero', 'airfoil_param.airfoil_parameters')
+        self.connect('airfoil_locations', 'airfoil_param.airfoil_locations')
+        self.connect('airfoil_files', 'airfoil_param.airfoil_files')
 
         # connections to analysis
         self.connect('spline.r_aero', 'analysis.r')

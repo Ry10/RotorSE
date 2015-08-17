@@ -72,7 +72,7 @@ for i in range(n):
 rotor.airfoil_files = af  # (List): names of airfoil file
 
 # === airfoil parameterization  ===
-rotor.airfoil_parameterization_type = 'Coordinates'  # (Enum): airfoil parameterization type ('Coordinates', 'NACA', 'CST')
+rotor.airfoil_parameterization_type = 'CST'  # (Enum): airfoil parameterization type ('Coordinates', 'NACA', 'CST')
 
 if rotor.airfoil_analysis_tool == 'XFOIL':
     if rotor.airfoil_parameterization_type == 'Coordinates':
