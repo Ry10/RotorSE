@@ -14,7 +14,7 @@ from openmdao.main.datatypes.api import Int, Float, Array, VarTree, Enum, Str, L
 
 from rotoraero import SetupRunVarSpeed, RegulatedPowerCurve, AEP, VarSpeedMachine, \
     RatedConditions, AeroLoads, RPM2RS, RS2RPM
-from rotoraerodefaults import CCBladeGeometry, CCBlade, CSMDrivetrain, RayleighCDF, WeibullWithMeanCDF
+from rotoraerodefaults import CCBladeGeometry, CCBlade, CSMDrivetrain, RayleighCDF, WeibullWithMeanCDF, AirfoilParameterization
 from openmdao.lib.drivers.api import Brent
 from commonse.csystem import DirectionVector
 from commonse.utilities import hstack, vstack, trapz_deriv, interp_with_deriv
@@ -726,11 +726,16 @@ class GeometrySpline(Component):
     bladeLength = Float(iotype='in', units='m', desc='blade length (if not precurved or swept) otherwise length of blade before curvature')
     sparT = Array(iotype='in', units='m', desc='thickness values of spar cap')
     teT = Array(iotype='in', units='m', desc='thickness values of trailing edge panels')
+    airfoil_locations = Array(iotype='in', desc='airfoil locations')
+    airfoil_parameters = Array(iotype='in', desc='airfoil parameters')
 
     # parameters
     idx_cylinder_aero = Int(iotype='in', desc='first idx in r_aero_unit of non-cylindrical section')  # constant twist inboard of here
     idx_cylinder_str = Int(iotype='in', desc='first idx in r_str_unit of non-cylindrical section')
     hubFraction = Float(iotype='in', desc='hub location as fraction of radius')
+    airfoil_parameterization_type = Enum('Coordinates', ('Coordinates', 'NACA', 'CST'), iotype='in', desc='airfoil parameterization type')
+    airfoil_analysis_tool = Enum('Files', ('Files', 'XFOIL'), iotype='in', desc='type of airfoil analysis tool, either using XFOIL or files')
+
 
     # out
     Rhub = Float(iotype='out', units='m', desc='dimensional radius of hub')
@@ -747,6 +752,8 @@ class GeometrySpline(Component):
     sparT_str = Array(iotype='out', units='m', desc='dimensional spar cap thickness distribution')
     teT_str = Array(iotype='out', units='m', desc='dimensional trailing-edge panel thickness distribution')
     r_sub_precurve = Array(iotype='out', desc='precurve locations (used internally)')
+    airfoil_locations_aero = Array(iotype='out', desc='airfoil locations')
+    airfoil_parameters_aero = Array(iotype='out', desc='airfoil parameters')
 
 
     def execute(self):
@@ -787,6 +794,14 @@ class GeometrySpline(Component):
         self.precurve_aero, _, _, _ = precurve_spline.interp(self.r_aero)
         self.precurve_str, _, _, _ = precurve_spline.interp(self.r_str)
         self.presweep_str = np.zeros_like(self.precurve_str)  # TODO: for now
+
+
+        # airfoil parameterization
+        if self.airfoil_parameterization_type != 'Coordinates':
+            af_parameters_spline = Akima(self.airfoil_locations*Rtip, self.airfoil_parameters)
+            self.airfoil_parameters_aero, _, _, _ = af_parameters_spline.interp(self.r_aero)
+        else:
+            self.airfoil_parameters_aero = self.airfoil_parameters
 
         # setup sparT parameterization
         nt = len(self.sparT)
@@ -1873,6 +1888,7 @@ class RotorSE(Assembly):
     yaw = Float(0.0, iotype='in', desc='yaw error', units='deg', deriv_ignore=True)
     nBlades = Int(3, iotype='in', desc='number of blades', deriv_ignore=True)
     airfoil_files = List(Str, iotype='in', desc='names of airfoil file', deriv_ignore=True)
+    coordinate_files = List(Str, iotype='in', desc='names of airfoil file', deriv_ignore=True)
 
     # --- atmosphere inputs ---
     rho = Float(1.225, iotype='in', units='kg/m**3', desc='density of air', deriv_ignore=True)
@@ -1978,6 +1994,14 @@ class RotorSE(Assembly):
     TotalCone = Float(iotype='out',units='rad', desc='total cone angle for blades at rated')
     Pitch = Float(iotype='out', units='rad', desc='pitch angle at rated')
 
+    # airfoil analysis
+    airfoil_analysis_tool = Enum('Files', ('Files', 'XFOIL'), iotype='in', desc='type of airfoil analysis tool, either using XFOIL or files')
+
+    # airfoil parameterization
+    airfoil_parameterization_type = Enum('Coordinates', ('Coordinates', 'NACA', 'CST'), iotype='in', desc='type of airfoil parameterization, either NACA, CST (Class-Shape-Transformation), or thickness-to-chord-ratio')
+    airfoil_parameters = Array(iotype='in', desc='parameters used in airfoil parameterization')
+    airfoil_locations = Array(iotype='in', desc='locations along blade for control points of airfoil shapes for parameterization')
+
     # internal use outputs
     Rtip = Float(iotype='out', units='m', desc='tip location in z_b')
     precurveTip = Float(iotype='out', units='m', desc='tip location in x_b')
@@ -1986,6 +2010,7 @@ class RotorSE(Assembly):
 
     def configure(self):
 
+        self.add('airfoil_param', AirfoilParameterization)
         self.add('turbineclass', TurbineClass())
         self.add('gridsetup', GridSetup())
         self.add('grid', RGrid())
@@ -2003,10 +2028,18 @@ class RotorSE(Assembly):
         self.add('cdf', RayleighCDF())
         self.add('aep', AEP())
 
+
         self.brent.workflow.add(['powercurve'])
 
-        self.driver.workflow.add(['turbineclass', 'gridsetup', 'grid', 'spline0', 'spline',
+        self.driver.workflow.add(['airfoil_param', 'turbineclass', 'gridsetup', 'grid', 'spline0', 'spline',
             'geom', 'setup', 'analysis', 'dt', 'brent', 'wind', 'cdf', 'aep'])
+
+        # connections to airfoil_param
+        self.connect('airfoil_parameterization_type', 'airfoil_param.airfoil_parameterization_type')
+        self.connect('airfoil_analysis_tool', 'airfoil_param.airfoil_analysis_tool')
+        self.connect('airfoil_parameters', 'airfoil_param.airfoil_parameters')
+        self.connect('airfoil_locations', 'airfoil_param.airfoil_locations')
+        self.connect('airfoil_files', 'airfoil_param.airfoil_files')
 
         # connections to turbineclass
         self.connect('turbine_class', 'turbineclass.turbine_class')
@@ -2033,6 +2066,10 @@ class RotorSE(Assembly):
         self.connect('hubFraction', 'spline0.hubFraction')
         self.connect('sparT', 'spline0.sparT')
         self.connect('teT', 'spline0.teT')
+        self.connect('airfoil_parameterization_type', 'spline0.airfoil_parameterization_type')
+        self.connect('airfoil_analysis_tool', 'spline0.airfoil_analysis_tool')
+        self.connect('airfoil_parameters', 'spline0.airfoil_parameters')
+        self.connect('airfoil_locations', 'spline0.airfoil_locations')
 
         # connections to spline
         self.connect('r_aero', 'spline.r_aero_unit')
@@ -2047,6 +2084,10 @@ class RotorSE(Assembly):
         self.connect('hubFraction', 'spline.hubFraction')
         self.connect('sparT', 'spline.sparT')
         self.connect('teT', 'spline.teT')
+        self.connect('airfoil_parameterization_type', 'spline.airfoil_parameterization_type')
+        self.connect('airfoil_analysis_tool', 'spline.airfoil_analysis_tool')
+        self.connect('airfoil_parameters', 'spline.airfoil_parameters')
+        self.connect('airfoil_locations', 'spline.airfoil_locations')
 
         # connections to geom
         self.spline.precurve_str = np.zeros(1)
@@ -2072,11 +2113,16 @@ class RotorSE(Assembly):
         self.connect('spline.precurve_str[-1]', 'analysis.precurveTip')
         self.connect('spline.Rhub', 'analysis.Rhub')
         self.connect('spline.Rtip', 'analysis.Rtip')
+        self.connect('airfoil_param.af', 'analysis.af')
+        # self.connect('airfoil_analysis_tool', 'analysis.airfoil_analysis_tool')
+        # self.connect('spline.airfoil_parameters_aero', 'analysis.airfoil_parameters')
+        # self.connect('spline.airfoil_locations', 'analysis.airfoil_locations')
         self.connect('hubHt', 'analysis.hubHt')
         self.connect('precone', 'analysis.precone')
         self.connect('tilt', 'analysis.tilt')
         self.connect('yaw', 'analysis.yaw')
         self.connect('airfoil_files', 'analysis.airfoil_files')
+        self.connect('coordinate_files', 'analysis.coordinate_files')
         self.connect('nBlades', 'analysis.B')
         self.connect('rho', 'analysis.rho')
         self.connect('mu', 'analysis.mu')
@@ -2086,6 +2132,7 @@ class RotorSE(Assembly):
         self.connect('setup.Omega', 'analysis.Omega')
         self.connect('setup.pitch', 'analysis.pitch')
         self.analysis.run_case = 'power'
+
 
         # connections to drivetrain
         self.connect('analysis.P', 'dt.aeroPower')
@@ -2207,11 +2254,17 @@ class RotorSE(Assembly):
         self.connect('spline.precurve_str[-1]', 'aero_rated.precurveTip')
         self.connect('spline.Rhub', 'aero_rated.Rhub')
         self.connect('spline.Rtip', 'aero_rated.Rtip')
+        # self.connect('airfoil_parameterization_type', 'aero_rated.airfoil_parameterization_type')
+        # self.connect('airfoil_analysis_tool', 'aero_rated.airfoil_analysis_tool')
+        # self.connect('spline.airfoil_parameters_aero', 'aero_rated.airfoil_parameters')
+        # self.connect('spline.airfoil_locations_aero', 'aero_rated.airfoil_locations')
+        self.connect('airfoil_param.af', 'aero_rated.af')
         self.connect('hubHt', 'aero_rated.hubHt')
         self.connect('precone', 'aero_rated.precone')
         self.connect('tilt', 'aero_rated.tilt')
         self.connect('yaw', 'aero_rated.yaw')
         self.connect('airfoil_files', 'aero_rated.airfoil_files')
+        self.connect('coordinate_files', 'aero_rated.coordinate_files')
         self.connect('nBlades', 'aero_rated.B')
         self.connect('rho', 'aero_rated.rho')
         self.connect('mu', 'aero_rated.mu')
@@ -2232,11 +2285,17 @@ class RotorSE(Assembly):
         self.connect('spline.precurve_str[-1]', 'aero_extrm.precurveTip')
         self.connect('spline.Rhub', 'aero_extrm.Rhub')
         self.connect('spline.Rtip', 'aero_extrm.Rtip')
+        # self.connect('airfoil_parameterization_type', 'aero_extrm.airfoil_parameterization_type')
+        # self.connect('airfoil_analysis_tool', 'aero_extrm.airfoil_analysis_tool')
+        # self.connect('spline.airfoil_parameters_aero', 'aero_extrm.airfoil_parameters')
+        # self.connect('spline.airfoil_locations_aero', 'aero_extrm.airfoil_locations')
+        self.connect('airfoil_param.af', 'aero_extrm.af')
         self.connect('hubHt', 'aero_extrm.hubHt')
         self.connect('precone', 'aero_extrm.precone')
         self.connect('tilt', 'aero_extrm.tilt')
         self.connect('yaw', 'aero_extrm.yaw')
         self.connect('airfoil_files', 'aero_extrm.airfoil_files')
+        self.connect('coordinate_files', 'aero_extrm.coordinate_files')
         self.connect('nBlades', 'aero_extrm.B')
         self.connect('rho', 'aero_extrm.rho')
         self.connect('mu', 'aero_extrm.mu')
@@ -2256,11 +2315,17 @@ class RotorSE(Assembly):
         self.connect('spline.precurve_str[-1]', 'aero_extrm_forces.precurveTip')
         self.connect('spline.Rhub', 'aero_extrm_forces.Rhub')
         self.connect('spline.Rtip', 'aero_extrm_forces.Rtip')
+        # self.connect('airfoil_parameterization_type', 'aero_extrm_forces.airfoil_parameterization_type')
+        # self.connect('airfoil_analysis_tool', 'aero_extrm_forces.airfoil_analysis_tool')
+        # self.connect('spline.airfoil_parameters_aero', 'aero_extrm_forces.airfoil_parameters')
+        # self.connect('spline.airfoil_parameters_aero', 'aero_extrm_forces.airfoil_locations')
+        self.connect('airfoil_param.af', 'aero_extrm_forces.af')
         self.connect('hubHt', 'aero_extrm_forces.hubHt')
         self.connect('precone', 'aero_extrm_forces.precone')
         self.connect('tilt', 'aero_extrm_forces.tilt')
         self.connect('yaw', 'aero_extrm_forces.yaw')
         self.connect('airfoil_files', 'aero_extrm_forces.airfoil_files')
+        self.connect('coordinate_files', 'aero_extrm_forces.coordinate_files')
         self.connect('nBlades', 'aero_extrm_forces.B')
         self.connect('rho', 'aero_extrm_forces.rho')
         self.connect('mu', 'aero_extrm_forces.mu')
@@ -2285,11 +2350,17 @@ class RotorSE(Assembly):
         self.connect('spline.precurve_str[-1]', 'aero_defl_powercurve.precurveTip')
         self.connect('spline.Rhub', 'aero_defl_powercurve.Rhub')
         self.connect('spline.Rtip', 'aero_defl_powercurve.Rtip')
+        # self.connect('airfoil_parameterization_type', 'aero_defl_powercurve.airfoil_parameterization_type')
+        # self.connect('airfoil_analysis_tool', 'aero_defl_powercurve.airfoil_analysis_tool')
+        # self.connect('spline.airfoil_parameters_aero', 'aero_defl_powercurve.airfoil_parameters')
+        # self.connect('spline.airfoil_locations', 'aero_defl_powercurve.airfoil_locations')
+        self.connect('airfoil_param.af', 'aero_defl_powercurve.af')
         self.connect('hubHt', 'aero_defl_powercurve.hubHt')
         self.connect('precone', 'aero_defl_powercurve.precone')
         self.connect('tilt', 'aero_defl_powercurve.tilt')
         self.connect('yaw', 'aero_defl_powercurve.yaw')
         self.connect('airfoil_files', 'aero_defl_powercurve.airfoil_files')
+        self.connect('coordinate_files', 'aero_defl_powercurve.coordinate_files')
         self.connect('nBlades', 'aero_defl_powercurve.B')
         self.connect('rho', 'aero_defl_powercurve.rho')
         self.connect('mu', 'aero_defl_powercurve.mu')
@@ -2484,6 +2555,12 @@ class RotorSE(Assembly):
         self.connect('tilt', ['aero_0.tilt', 'aero_120.tilt', 'aero_240.tilt'])
         self.connect('yaw', ['aero_0.yaw', 'aero_120.yaw', 'aero_240.yaw'])
         self.connect('airfoil_files', ['aero_0.airfoil_files', 'aero_120.airfoil_files', 'aero_240.airfoil_files'])
+        self.connect('coordinate_files', ['aero_0.coordinate_files', 'aero_120.coordinate_files', 'aero_240.coordinate_files'])
+        # self.connect('airfoil_parameterization_type', ['aero_0.airfoil_parameterization_type', 'aero_120.airfoil_parameterization_type', 'aero_240.airfoil_parameterization_type'])
+        # self.connect('airfoil_analysis_tool', ['aero_0.airfoil_analysis_tool', 'aero_120.airfoil_analysis_tool', 'aero_240.airfoil_analysis_tool'])
+        # self.connect('spline.airfoil_parameters_aero', ['aero_0.airfoil_parameters', 'aero_120.airfoil_parameters', 'aero_240.airfoil_parameters'])
+        # self.connect('spline.airfoil_locations_aero', ['aero_0.airfoil_locations', 'aero_120.airfoil_locations', 'aero_240.airfoil_locations'])
+        self.connect('airfoil_param.af', ['aero_0.af', 'aero_120.af', 'aero_240.af'])
         self.connect('nBlades', ['aero_0.B','aero_120.B', 'aero_240.B'])
         self.connect('rho', ['aero_0.rho', 'aero_120.rho', 'aero_240.rho'])
         self.connect('mu', ['aero_0.mu','aero_120.mu' ,'aero_240.mu'])
@@ -2590,6 +2667,11 @@ if __name__ == '__main__':
         af[i] = airfoil_types[af_idx[i]]
     rotor.airfoil_files = af  # (List): names of airfoil file
     # ----------------------
+
+    # === airfoil parameterization  ===
+    rotor.airfoil_parameterization_type = 'None' # (Enum): airfoil parameterization type ('None', 'NACA', 'CST', 't_c')
+    rotor.airfoil_parameters = []
+    rotor.airfoil_locations = [0.1666, 0.36666667, 0.5, 0.63333333, 0.83333333, 0.97777724] # (Array): initial airfoil shape locations on unit radius
 
     # === atmosphere ===
     rotor.rho = 1.225  # (Float, kg/m**3): density of air

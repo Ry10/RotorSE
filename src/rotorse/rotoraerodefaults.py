@@ -17,7 +17,12 @@ from commonse.utilities import sind, cosd, smooth_abs, smooth_min, hstack, vstac
 from rotoraero import GeomtrySetupBase, AeroBase, DrivetrainLossesBase, CDFBase, \
     VarSpeedMachine, FixedSpeedMachine, RatedConditions, common_configure
 from akima import Akima
-
+import pyXLIGHT
+from airfoilprep import Airfoil, Polar
+import os, sys
+from naca_generator import naca4, naca5
+from math import cos, factorial
+import string
 
 # ---------------------
 # Map Design Variables to Discretization
@@ -169,6 +174,170 @@ class CCBladeGeometry(GeomtrySetupBase):
 
         return J
 
+class AirfoilParameterization(Component):
+    airfoil_files = List(Str, iotype='in', desc='names of airfoil file')
+    airfoil_parameterization_type = Enum('Coordinates', ('Coordinates', 'NACA', 'CST'), iotype='in', desc='type of airfoil parameterization, either NACA, CST (Class-Shape-Transformation), or thickness-to-chord-ratio')
+    airfoil_analysis_tool = Enum('Files', ('Files', 'XFOIL'), iotype='in', desc='type of airfoil analysis tool, either using XFOIL or files')
+    airfoil_parameters = Array(iotype='in', desc='airfoil parameters')
+    airfoil_locations = Array(iotype='in', desc='airfoil locations')
+    af = Array(iotype='out', desc='CCBlade objects')
+
+    def execute(self):
+        if self.airfoil_analysis_tool == 'Files':
+            # airfoil files
+            n = len(self.airfoil_files)
+            af = [0]*n
+            afinit = CCAirfoil.initFromAerodynFile
+
+            for i in range(n):
+                af[i] = afinit(self.airfoil_files[i])
+        else:
+            af = self.generate_af()
+
+        self.af = af
+
+    def generate_af(self):
+
+        n = len(self.airfoil_parameters)
+        af = [0]*n
+        af_type = self.airfoil_parameterization_type
+        af_parameters = self.airfoil_parameters
+        r_over_R = 0.5
+        chord_over_r = 0.15
+        tsr = 7.55
+        cd_max = 1.5
+
+        for i in range(n):
+            x = []
+            y = []
+            if af_type == 'Coordinates':
+                try:
+                    f = open(af_parameters[i],'r')
+                except:
+                    print 'There was an error opening the airfoil file %s'%(af_parameters[i])
+                    sys.exit(1)
+                for line in f:
+                    try:
+                        x.append(float(string.split(line)[0]))
+                        y.append(float(string.split(line)[1]))
+                    except:
+                        pass
+            elif af_type == 'NACA':
+                if len(str(int(af_parameters[i]))) == 4:
+                    pts = naca4(str(int(af_parameters[i])), 60)
+                elif len(str(int(af_parameters[i] == 5))):
+                    pts = naca5(str(int(af_parameters[i])), 60)
+                else:
+                    'Please input only NACA 4 or 5 series'
+                x = pts[:][0]
+                y = pts[:][1]
+            elif af_type == 'CST':
+                wu, wl = np.split(af_parameters[i], 2)
+                w1 = np.average(wl)
+                w2 = np.average(wu)
+                if w1 < w2:
+                    pass
+                else:
+                    higher = wl
+                    lower = wu
+                    wl = lower
+                    wu = higher
+                N = 120
+                dz = 0.
+
+                # Populate x coordinates
+                x = np.ones((N, 1), dtype=complex)
+                zeta = np.zeros((N, 1))
+                for i in range(0, N):
+                    zeta[i] = 2 * pi / N * i
+                    if i == N - 1:
+                        zeta[i] = 2 * pi
+                    x[i] = 0.5*(cos(zeta[i])+1)
+
+                # N1 and N2 parameters (N1 = 0.5 and N2 = 1 for airfoil shape)
+                N1 = 0.5
+                N2 = 1
+
+                try:
+                    zerind = np.where(x == 0)  # Used to separate upper and lower surfaces
+                    zerind = zerind[0][0]
+                except:
+                    zerind = N/2
+
+                xl = np.zeros(zerind, dtype=complex)
+                xu = np.zeros(N-zerind, dtype=complex)
+
+                for i in range(len(xl)):
+                    xl[i] = np.real(x[i])            # Lower surface x-coordinates
+                for i in range(len(xu)):
+                    xu[i] = np.real(x[i + zerind])   # Upper surface x-coordinates
+
+                yl = self.__ClassShape(wl, xl, N1, N2, -dz) # Call ClassShape function to determine lower surface y-coordinates
+                yu = self.__ClassShape(wu, xu, N1, N2, dz)  # Call ClassShape function to determine upper surface y-coordinates
+
+                y = np.concatenate([yl, yu])  # Combine upper and lower y coordinates
+                y = y[::-1]
+                coord_split = [xl, yl, xu, yu]  # Combine x and y into single output
+                coord = [x, y]
+
+            else:
+                print 'Error. Airfoil parameterization type not specified. Please choose Coordinates, NACA, or CST.'
+
+            if i < 3:
+                Re1 = [1e6]
+                af[0] = CCAirfoil([-180, 0, 180], Re1, [0, 0, 0], [0.5, 0.5, 0.5])
+                af[1] = CCAirfoil([-180, 0, 180], Re1, [0, 0, 0], [0.5, 0.5, 0.5])
+                af[2] = CCAirfoil([-180, 0, 180], Re1, [0, 0, 0], [0.35, 0.35, 0.35])
+            else:
+                coordinate_points = [x, y]
+                Re = 1e6
+                alphas = np.linspace(-20, 20, 80)
+                airfoil = pyXLIGHT.xfoilAnalysis(coordinate_points)
+                airfoil.re = Re
+                airfoil.mach = 0.03
+                airfoil.iter = 1000
+                cl = np.zeros(len(alphas))
+                cd = np.zeros(len(alphas))
+                cm = np.zeros(len(alphas))
+                for j in range(len(alphas)):
+                    angle = alphas[j]
+                    cl[j], cd[j], cm[j], lexitflag = airfoil.solveAlpha(angle)
+                    # print cl[j], cd[j], angle
+                p1 = Polar(Re, alphas, cl, cd, cm)
+                af_p = Airfoil([p1])
+                af3D = af_p.correction3D(r_over_R, chord_over_r, tsr)
+                af_extrap1 = af3D.extrapolate(cd_max)
+                alpha_ext, Re_ext, cl_ext, cd_ext, cm_ext = af_extrap1.createDataGrid()
+                af[i] = CCAirfoil(alpha_ext, Re_ext, cl_ext, cd_ext)
+
+        return af
+
+    def __ClassShape(self, w, x, N1, N2, dz):
+
+        # Class function; taking input of N1 and N2
+        C = np.zeros(len(x), dtype=complex)
+        for i in range(len(x)):
+            C[i] = x[i]**N1*((1-x[i])**N2)
+
+        # Shape function; using Bernstein Polynomials
+        n = len(w) - 1  # Order of Bernstein polynomials
+
+        K = np.zeros(n+1, dtype=complex)
+        for i in range(0, n+1):
+            K[i] = factorial(n)/(factorial(i)*(factorial((n)-(i))))
+
+        S = np.zeros(len(x), dtype=complex)
+        for i in range(len(x)):
+            S[i] = 0
+            for j in range(0, n+1):
+                S[i] += w[j]*K[j]*x[i]**(j) * ((1-x[i])**(n-(j)))
+
+        # Calculate y output
+        y = np.zeros(len(x), dtype=complex)
+        for i in range(len(y)):
+            y[i] = C[i] * S[i] + x[i] * dz
+
+        return y
 
 
 class CCBlade(AeroBase):
@@ -191,6 +360,7 @@ class CCBlade(AeroBase):
 
     # parameters
     airfoil_files = List(Str, iotype='in', desc='names of airfoil file')
+    coordinate_files = List(Str, iotype='in', desc='names of airfoil file')
     B = Int(3, iotype='in', desc='number of blades')
     rho = Float(1.225, iotype='in', units='kg/m**3', desc='density of air')
     mu = Float(1.81206e-5, iotype='in', units='kg/(m*s)', desc='dynamic viscosity of air')
@@ -200,21 +370,16 @@ class CCBlade(AeroBase):
     hubloss = Bool(True, iotype='in', desc='include Prandtl hub loss model')
     wakerotation = Bool(True, iotype='in', desc='include effect of wake rotation (i.e., tangential induction factor is nonzero)')
     usecd = Bool(True, iotype='in', desc='use drag coefficient in computing induction factors')
+    af = Array(iotype='in', desc='CCBlade objects')
 
     missing_deriv_policy = 'assume_zero'
-
 
     def execute(self):
 
         if len(self.precurve) == 0:
             self.precurve = np.zeros_like(self.r)
 
-        # airfoil files
-        n = len(self.airfoil_files)
-        af = [0]*n
-        afinit = CCAirfoil.initFromAerodynFile
-        for i in range(n):
-            af[i] = afinit(self.airfoil_files[i])
+        af = self.af
 
         self.ccblade = CCBlade_PY(self.r, self.chord, self.theta, af, self.Rhub, self.Rtip, self.B,
             self.rho, self.mu, self.precone, self.tilt, self.yaw, self.shearExp, self.hubHt,
@@ -509,6 +674,7 @@ def common_io_with_ccblade(assembly, varspeed, varpitch, cdf_type):
     assembly.add('tilt', Float(0.0, iotype='in', desc='shaft tilt', units='deg'))
     assembly.add('yaw', Float(0.0, iotype='in', desc='yaw error', units='deg'))
     assembly.add('airfoil_files', List(Str, iotype='in', desc='names of airfoil file'))
+    assembly.add('coordinate_files', List(Str, iotype='in', desc='names of airfoil file'))
     assembly.add('idx_cylinder', Int(iotype='in', desc='location where cylinder section ends on unit radius'))
     assembly.add('B', Int(3, iotype='in', desc='number of blades'))
     assembly.add('rho', Float(1.225, iotype='in', units='kg/m**3', desc='density of air'))
@@ -586,6 +752,7 @@ def common_configure_with_ccblade(assembly, varspeed, varpitch, cdf_type):
     assembly.connect('tilt', 'analysis.tilt')
     assembly.connect('yaw', 'analysis.yaw')
     assembly.connect('airfoil_files', 'analysis.airfoil_files')
+    assembly.connect('coordinate_files', 'analysis.coordinate_files')
     assembly.connect('B', 'analysis.B')
     assembly.connect('rho', 'analysis.rho')
     assembly.connect('mu', 'analysis.mu')
